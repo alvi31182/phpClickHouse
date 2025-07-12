@@ -33,3 +33,8 @@ include_once __DIR__ . '/src/Transport/StreamRead.php';
 include_once __DIR__ . '/src/Transport/StreamWrite.php';
 include_once __DIR__ . '/src/Transport/StreamInsert.php';
 
+// Fiber async support
+include_once __DIR__ . '/src/Transport/FiberHandler.php';
+include_once __DIR__ . '/src/Transport/FiberHttp.php';
+include_once __DIR__ . '/src/Statement/FiberStatement.php';
+include_once __DIR__ . '/src/FiberClient.php';
