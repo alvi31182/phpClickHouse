@@ -2,6 +2,9 @@
 
 namespace ClickHouseDB\Statement;
 
+use ClickHouseDB\Exception\TransportException;
+use ClickHouseDB\Exception\DatabaseException;
+use ClickHouseDB\Exception\QueryException;
 use ClickHouseDB\Statement;
 use ClickHouseDB\Transport\CurlerRequest;
 use ClickHouseDB\Transport\FiberHandler;
@@ -28,11 +31,6 @@ class FiberStatement extends Statement
      */
     private $isExecuted = false;
 
-    /**
-     * @var Fiber|null
-     */
-    private $resultFiber = null;
-
     public function __construct(CurlerRequest $request, FiberHandler $fiberHandler, string $requestId)
     {
         parent::__construct($request);
@@ -49,30 +47,64 @@ class FiberStatement extends Statement
             return $this;
         }
 
-        // Create a fiber to wait for the result
-        $this->resultFiber = new Fiber(function () {
-            while (!$this->fiberHandler->isRequestCompleted($this->requestId)) {
-                Fiber::suspend();
-            }
-            
-            // Get the completed request
-            $completedRequest = $this->fiberHandler->getCompletedRequest($this->requestId);
-            if ($completedRequest) {
-                $this->_request = $completedRequest;
-            }
-        });
-
-        $this->resultFiber->start();
-        
-        // Process the fiber until completion
-        while ($this->resultFiber && !$this->resultFiber->isTerminated()) {
-            if ($this->resultFiber->isSuspended()) {
-                $this->resultFiber->resume();
-            }
+        // Wait for the request to complete
+        while (!$this->fiberHandler->isRequestCompleted($this->requestId)) {
+            usleep(1000); // 1ms delay
         }
+        
+        // Get the completed request
+        $completedRequest = $this->fiberHandler->getCompletedRequest($this->requestId);
+        if (!$completedRequest) {
+            throw new TransportException("Request not found after completion");
+        }
+
+        // Create a new Statement with the completed request
+        $completedStatement = new Statement($completedRequest);
+        
+        // Copy the completed statement's data to this instance
+        $this->copyStatementData($completedStatement);
 
         $this->isExecuted = true;
         return $this;
+    }
+
+    /**
+     * Copy data from another statement instance
+     */
+    private function copyStatementData(\ClickHouseDB\Statement $source): void
+    {
+        // Use reflection to copy private properties
+        $reflection = new \ReflectionClass($source);
+        
+        $properties = [
+            '_rawData',
+            '_http_code', 
+            '_init',
+            'query',
+            'format',
+            'sql',
+            'meta',
+            'totals',
+            'extremes',
+            'rows',
+            'rows_before_limit_at_least',
+            'array_data',
+            'statistics',
+            'iterator'
+        ];
+        
+        foreach ($properties as $propertyName) {
+            try {
+                $property = $reflection->getProperty($propertyName);
+                $value = $property->getValue($source);
+                
+                $thisProperty = $reflection->getProperty($propertyName);
+                $thisProperty->setValue($this, $value);
+            } catch (\ReflectionException $e) {
+                // Skip properties that don't exist
+                continue;
+            }
+        }
     }
 
     /**
@@ -94,108 +126,182 @@ class FiberStatement extends Statement
     /**
      * Override parent methods to ensure await is called
      */
+    /**
+     * @return array
+     * @throws TransportException
+     */
     public function rows(): array
     {
         $this->await();
         return parent::rows();
     }
 
+    /**
+     * @param string $key
+     * @return mixed|null
+     * @throws TransportException
+     */
     public function fetchOne($key = null)
     {
         $this->await();
         return parent::fetchOne($key);
     }
 
+    /**
+     * @param string $key
+     * @return mixed|null
+     * @throws TransportException
+     */
     public function fetchRow($key = null)
     {
         $this->await();
         return parent::fetchRow($key);
     }
 
+    /**
+     * @return int
+     * @throws TransportException
+     */
     public function count(): int
     {
         $this->await();
         return parent::count();
     }
 
+    /**
+     * @return bool|int
+     */
     public function countAll()
     {
         $this->await();
         return parent::countAll();
     }
 
+    /**
+     * @return array
+     * @throws TransportException
+     */
     public function totals(): array
     {
         $this->await();
         return parent::totals();
     }
 
+    /**
+     * @return array
+     * @throws \Exception
+     */
     public function extremes(): array
     {
         $this->await();
         return parent::extremes();
     }
 
+    /**
+     * @return array
+     * @throws \Exception
+     */
     public function extremesMin(): array
     {
         $this->await();
         return parent::extremesMin();
     }
 
-    public function extremesMax(): array
+    /**
+     * @return array
+     * @throws \Exception
+     */
+    public function extremesMax()
     {
         $this->await();
         return parent::extremesMax();
     }
 
+    /**
+     * @param bool $key
+     * @return array|mixed|null
+     * @throws TransportException
+     */
     public function statistics($key = false)
     {
         $this->await();
         return parent::statistics($key);
     }
 
+    /**
+     * @return array
+     * @throws TransportException
+     */
     public function info(): array
     {
         $this->await();
         return parent::info();
     }
 
+    /**
+     * @return array
+     * @throws TransportException
+     */
     public function info_upload(): array
     {
         $this->await();
         return parent::info_upload();
     }
 
+    /**
+     * @return float
+     * @throws TransportException
+     */
     public function totalTimeRequest(): float
     {
         $this->await();
         return parent::totalTimeRequest();
     }
 
+    /**
+     * @return mixed|string
+     * @throws TransportException
+     */
     public function rawData()
     {
         $this->await();
         return parent::rawData();
     }
 
-    public function jsonRows(): array
+    /**
+     * @return false|string
+     */
+    public function jsonRows()
     {
         $this->await();
         return parent::jsonRows();
     }
 
+    /**
+     * @param string|null $path
+     * @return array
+     * @throws TransportException
+     */
     public function rowsAsTree($path): array
     {
         $this->await();
         return parent::rowsAsTree($path);
     }
 
+    /**
+     * @return bool
+     * @throws TransportException
+     */
     public function isError(): bool
     {
         $this->await();
         return parent::isError();
     }
 
+    /**
+     * @throws DatabaseException
+     * @throws QueryException
+     */
     public function error()
     {
         $this->await();

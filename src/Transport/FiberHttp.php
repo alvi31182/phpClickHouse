@@ -4,6 +4,7 @@ namespace ClickHouseDB\Transport;
 
 use ClickHouseDB\Exception\TransportException;
 use ClickHouseDB\Query\Degeneration;
+use ClickHouseDB\Query\Degeneration\Bindings;
 use ClickHouseDB\Query\Query;
 use ClickHouseDB\Query\WhereInFile;
 use ClickHouseDB\Query\WriteToFile;
@@ -72,7 +73,29 @@ class FiberHttp extends Http
      */
     public function selectAsync($sql, array $bindings = [], $whereInFile = null, $writeToFile = null): FiberStatement
     {
-        $request = $this->prepareSelect($sql, $bindings, $whereInFile, $writeToFile);
+        // Create query object with degeneration for bindings
+        $degenerations = [];
+        if (!empty($bindings)) {
+            $degenerations[] = new Bindings();
+        }
+        
+        $query = new Query($sql, $degenerations);
+        
+        // Apply bindings to degeneration
+        if (!empty($bindings)) {
+            foreach ($degenerations as $degeneration) {
+                if ($degeneration instanceof Degeneration) {
+                    $degeneration->bindParams($bindings);
+                }
+            }
+        }
+        
+        // Set format
+        $query->setFormat('JSON');
+        
+        // Create request using public method
+        $request = $this->getRequestRead($query, $whereInFile, $writeToFile);
+        
         $requestId = $this->fiberHandler->addRequest($request);
         
         // Store mapping for later reference
@@ -191,7 +214,26 @@ class FiberHttp extends Http
      */
     public function write($sql, array $bindings = [], $exception = true): Statement
     {
-        $request = $this->prepareWrite($sql, $bindings);
+        // Create query object with degeneration for bindings
+        $degenerations = [];
+        if (!empty($bindings)) {
+            $degenerations[] = new Bindings();
+        }
+        
+        $query = new Query($sql, $degenerations);
+        
+        // Apply bindings to degeneration
+        if (!empty($bindings)) {
+            foreach ($degenerations as $degeneration) {
+                if ($degeneration instanceof Degeneration) {
+                    $degeneration->bindParams($bindings);
+                }
+            }
+        }
+        
+        // Create request using public method
+        $request = $this->getRequestWrite($query);
+        
         $requestId = $this->fiberHandler->addRequest($request);
         
         $this->fiberHandler->executeAsync();
@@ -201,7 +243,12 @@ class FiberHttp extends Http
             throw new TransportException("Failed to execute write request");
         }
         
-        return new Statement($completedRequest);
+        $response = new Statement($completedRequest);
+        if ($exception && $response->isError()) {
+            $response->error();
+        }
+        
+        return $response;
     }
 
     /**
